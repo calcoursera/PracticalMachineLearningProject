@@ -1,0 +1,181 @@
+---
+title: "PMLProjectWk4Calai"
+author: "Calai"
+date: "Saturday, August 13, 2016"
+output: html_document
+---
+
+Practical Machine Learning: Course project
+===========================================
+
+```{r preliminaries, include=FALSE, cache=FALSE}
+library(knitr)
+opts_chunk$set(cache=TRUE)
+set.seed(12)
+```
+
+
+The goal of the project
+-----------------------
+
+The goal of this project is to predict the manner in which 6 participants performed their barbell lifts.  This project uses data from accelerometers on the belt, arm, forearm and dumbell as they performed the exercises in 5 different ways - correctly and incorrectly.  So, the question to be asked is whether the quality of the activity can be predicted.
+
+Source of data : [Qualitative Activity Recognition of Weight Lifting Exercises](http://groupware.les.inf.puc-rio.br/har#ixzz34irPKNuZ)
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. [Qualitative Activity Recognition of Weight Lifting Exercises](http://groupware.les.inf.puc-rio.br/har#ixzz34irPKNuZ). *Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13)*. Stuttgart, Germany: ACM SIGCHI, 2013.
+
+
+The training of the model
+-------------------------
+
+The following sections outline the preparation of the input data and feature selection, followed by the algorithm and evaluation.
+
+### Read data from source
+```{r read from url}
+trainSourceUrl <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testSourceUrl <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+```
+
+First, the training and test data are read into R from the URLs, setting the not available values to `NA`.
+
+```{r read.csv}
+trainingRawData <- read.csv(url(trainSourceUrl), na.strings=c("NA","#DIV/0!",""))
+testingRawData <- read.csv(url(testSourceUrl ), na.strings=c("NA","#DIV/0!",""))
+```
+
+### Feature selection
+
+The data set is then reduced by identifying  and removing the columns with high NAs, as these will not be useful for training the model. In other words, relevant features are selected for the prediction model.
+
+```{r check NAs}
+highNAs <- colMeans(is.na(trainingRawData))
+table(highNAs)
+```
+
+
+
+```{r remove NA columns}
+# index of columns with NA values
+ind <- !highNAs
+# check
+sum(ind)
+# remove these columns  
+reducedTrainingRawData<- trainingRawData[ind]
+# check
+ncol(reducedTrainingRawData)
+```
+
+Other columns that are not related to the sensor data and those that are not useful for the prediction are removed.  These include the columns related to the user name, time stamps and windows as listed below : `X`, 'user_name`,`raw_timestamp_part_1`, `raw_timestamp_part_2`, and `cvtd_timestamp`,`new_window` and `num_window`. 
+
+```{r remove unnecessary columns}
+# find columns not containing sensor measurement and unrelated data
+ind <- grep("^X$|user_name|timestamp|window", names(reducedTrainingRawData))
+# how many such
+length(ind)
+# remove them
+reducedTrainingRawData <- reducedTrainingRawData[-ind]
+```
+
+
+### Data Preparation for training
+
+With a dataset containing one outcome column (`classe`) and `r ncol(reducedTrainingRawData) - 1L` feature columns,  the function `createDataPartition` of the `caret` package is used to split the data into a training (70%) and a cross-validation data set (30%). 
+
+```{r data partition, message=FALSE}
+# if got problem, run install.packages("caret", dependencies = c("Depends", "Suggests")) 
+# The downloaded source packages are in
+#  'C:\Users\GANCAL\AppData\Local\Temp\Rtmpqc4N8f\downloaded_packages'
+#finally, had to reinstall R and Rstudio after several unsuccessful attempts
+library(caret)
+```
+```{r createDataPartition}
+inPartn <- createDataPartition(y = reducedTrainingRawData$classe, p = 0.7, list = FALSE)
+```
+
+The index `inPartn` is used to partition the data.
+
+```{r separate datasets}
+trainingSet <- reducedTrainingRawData[inPartn, ]
+# the number of columns on the training set
+nrow(trainingSet)
+crossvalSet <- reducedTrainingRawData[-inPartn, ]
+# the number of rows in the cross-validation set
+nrow(crossvalSet)
+```
+
+
+### Model building
+
+The *random-forest* technique was used to build the predictive model. By varying the parameters, several models were trained and tested on the cross-validation data. All of them had a good accuracy of around 99%. The model that took the least training time is presented here for brevity's sake.
+
+```{r load randomForest package, message=FALSE}
+library(randomForest)
+```
+
+```{r training model}
+trControl <- trainControl(method = "cv", number = 2)
+finalPredMod <- train(classe ~ ., data = trainingSet, method = "rf", prox = TRUE, trControl = trControl)
+```
+
+### Evaluation of the model (out-of-sample error)
+
+To start with, the  model was used to predict the outcome using the cross-validation dataset.
+
+```{r predict}
+pred <- predict(finalPredMod, newdata = crossvalSet)
+```
+
+Second, the function `confusionMatrix` is used to calculate the accuracy of the prediction.
+
+```{r accuracy}
+coMa <- confusionMatrix(pred, reference = crossvalSet$classe)
+coMa
+acc <- coMa$overall["Accuracy"]
+acc
+```
+
+The accuracy of the prediction is `r paste0(round(acc * 100, 2), "%")` as seen. Hence, the *out-of-sample error* is `r paste0(round(100 - acc * 100, 2), "%")`. With such good prediction results,  it is decided to use Random Forests for prediction on the test set over other alternative algorithms.
+
+
+### Variable importance
+
+The top 5 important variables and their relative importance are :
+
+```{r Important variables}
+impVar <- varImp(finalPredMod)$importance
+impVar[head(order(unlist(impVar), decreasing = TRUE), 5L), , drop = FALSE]
+```
+### Making predictions on the Test Data and writing to files
+
+The model is then applied on the given 20 test data for prediction
+
+```{r apply prediction model on test data}
+# predict on given testing set
+
+#print(predict(finalPredMod, newdata=testingRawData))
+
+preds <- predict(finalPredMod, newdata=testingRawData)
+print(preds)
+# predictions to character vector
+preds <- as.character(preds)
+
+# function to write predictions to files testSet_id_1,etc.
+pred_write_files <- function(x) {
+    n <- length(x)
+    for(i in 1:n) {
+        filename <- paste0("testSet_id_", i, ".txt")
+        write.table(x[i], file=filename, quote=F, row.names=F, col.names=F)
+    }
+}
+
+# create prediction files for submission
+pred_write_files(preds)
+```
+### Conclusion
+
+The model built using random forest technique with cross-validation has yielded a highly accuracte model, far beyond expectations.  The results of the prediction (as in previous section) on the 20 given test data have been submitted as part of the prediction quiz for Week 4.
+
+
+***************************************************************************
+
+
